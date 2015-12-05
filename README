@@ -1,0 +1,253 @@
+Hindley-Milner with contracts.
+Class assignment for dvh's fall '14 cmsc631.
+labichn
+
+E ::= n                 # some natural number
+   |  true
+   |  false
+   |  x                 # some variable name
+   |  (add1 E)
+   |  (+ E E)
+   |  (* E E)
+   |  (/ E E)
+   |  (= E E)
+   |  (and E E)
+   |  (not E)
+   |  (or E E)
+   |  (if E E E)
+   |  (lambda x E)
+   |  (let (x E) E)
+   |  (? E)
+   |  (-> E E)
+   |  (! E E)
+   |  (E E)
+
+T ::= B
+   |  N                 # includes divide by zero errors
+   |  T -> T
+   |  T/c
+   |  X
+
+TE ∈ ℘(T * T)
+EQ ∈ ℘(T * T)
+XS ∈ ℘(X)
+  
+
+The notation `T = T'` denotes that types T and T' are equal and is
+represented as a pair of types T and T'. The notation `T if EQ`
+represents some type T if the set of type equality assertions EQ can
+be unified and is represented as a pair of types T and EQ. Most work
+of the type system is shunted off to unification. Unification is
+implemented as per Van Horn's /Program Analysis and Understanding/
+with some extensions detailed below.
+
+The ternary typing relation _ |- _ : _ ∈ TE * E * (B * EQ) is defined
+as follows:
+
+Base leaves:
+
+  -------------------- true
+  TE |- true : B if {}
+
+  --------------------- false
+  TE |- false : B if {}
+
+  ----------------- n
+  TE |- n : N if {}
+
+
+`unary` and `binary` handle tedious patterns for expressions that
+always return base types:
+
+         TE |- E : T' if EQ
+  ----------------------------------- base unary
+  unary T TE E = T if EQ U (T = T')
+
+
+      TE |- E : T' if EQ        TE |- E' : T'' if EQ'
+  ------------------------------------------------------- base binary
+  binary T TE E E' = T if EQ U EQ' U (T = T') U (T = T'')
+
+
+Base operations:
+
+  N if EQ = unary N TE E
+  ------------------------ add1
+  TE |- (add1 E) : N if EQ
+
+
+  N if EQ = binary N TE E E'
+  -------------------------- *
+   TE |- (* E E') : N if EQ
+
+
+  N if EQ = binary N TE E E'
+  -------------------------- +
+   TE |- (+ E E') : N if EQ
+
+
+  N if EQ = binary N TE E E'
+ -------------------------- /
+   TE |- (/ E E') : N if EQ
+
+
+  B if EQ = unary B TE E
+  ----------------------- not
+  TE |- (not E) : B if EQ
+
+
+  B if EQ = binary B TE E E'
+  -------------------------- or
+   TE |- (or E E') : B if EQ
+
+
+  B if EQ = binary B TE E E'
+  -------------------------- and
+  TE |- (and E E') : B if EQ
+
+
+Equality is defined for everything and always returns a boolean. Bit
+of a cop-out, but we'll just assume that function equality is defined
+to be false.
+
+  TE |- E : T if EQ   TE |- E' : T' if EQ
+  --------------------------------------- =
+        (= E E') |- B if EQ U EQ'
+
+
+For if, the predicate must be in B and the branches must have the same
+type.
+
+    TE |- E' : T' if EQ' TE |- E'' : T'' if EQ'' TE |- E : T if EQ
+  ------------------------------------------------------------------- if
+  TE |- (if E E' E'') : T' if EQ U EQ' U EQ'' U (T = B) U (T' = T'')
+
+
+The metafunction `genvar` always returns a fresh type variable. It is
+used here to generate a new type variable for lambda's input,
+
+  T = genvar   TE, X : T |- E : T' if EQ
+  -------------------------------------- lambda
+    TE |- (lambda X E) : T -> T' if EQ
+
+
+`genvar` is used again to generate a type variable for the result of
+an application.
+
+  TE |- E : T if EQ   TE |- E' : T' if EQ'   T'' = genvar
+  ------------------------------------------------------- app
+     TE |- (E E') : T'' if EQ U EQ' U (T = T' -> T'')
+
+
+The metafunction `fv` is defined using structural recursion over the
+given type:
+
+  fv(X)           = {X}
+  fv(T -> T')     = fv(T) U fv(T')
+  fv(T/c)         = fv(T)
+  fv(∀ X ... . T) = fv(T) - BS ...
+  fv(_)           = {} otherwise
+
+`fv` can be lifted to TE as the union of the free variables of every
+element in its codomain.
+
+The metafunction `gen` generalizes some type T in environment TE as
+follows:
+
+  gen(TE, T) = ∀ (fv T) - (fv TE) . T
+
+and enables let polymorphism in the following rule.
+
+  TE |- E : T if EQ   TE, X : gen(TE, T) |- E' : T' if EQ'
+  -------------------------------------------------------- let
+       TE |- (let (X E) E') : T' if EQ U EQ'
+
+
+Typing contracts is easy. Predicates generate a new assertion that E's
+type is a function from some type T to B.
+
+     T = genvar   TE |- E : T' if EQ
+  --------------------------------------- pred contract
+  TE |- (? E) : T/c if EQ U (T' = T -> B)
+
+
+Contract arrows generate new type variables T'' and T''' for the type
+parameters of the contract types T and T', respectively.
+
+    TE |- E : T if EQ   TE |- E' : T' if EQ'
+         T'' = genvar   T''' = genvar
+  --------------------------------------------- arr contract
+  TE |- (-> E E') : (T'' -> T''')/c
+     if EQ U EQ' U (T'' = T/c) U (T''' = T''/c)
+
+
+Monitors generate a new type variable T'' for the type parameter of
+the contract type T.
+
+    TE |- E : T if EQ    TE |- E' : T' if EQ'
+                 T'' = genvar
+  --------------------------------------------- monitor
+  TE |- (! E E') : T' if EQ U EQ' U (T = T''/c)
+
+
+Beta reduction is defined for types as follows:
+
+  β(T -> T', X, U)  = β(T, X, U) -> β(T', X, U)
+  β(T/c, X, U)      = β(T, X, U)/c
+  β(Y, X, U)        = U when X = Y
+  β(Y, X, U)        = X when X != Y
+  β(∀ YS . T, X, U) = ∀ YS . T when X ∈ YS
+  β(∀ YS . T, X, U) = ∀ YS . β(T, X, U) when X ∉ YS
+  β(T, X, U)        = T otherwise
+
+Variables mapping to polytypes are instantiated with the metafunction
+`inst`, iteratively generating fresh variables for all bound variables
+using `β`. Monotypes are just returned:
+
+  inst(∀ XS . T)   = inst'(XS, T)
+  inst(T)          = T otherwise
+  inst'({}, T)     = T
+  inst'(X U XS, T) = inst'(XS, β(T, X, genvar))
+
+Finally the typing rule for variables:
+
+  X : T ∈ TE   T' = inst(T)
+  ------------------------- var
+      TE |- X : T' if {}
+
+
+After all this we have some type T if EQ can be unified. Unification
+is extended componentwise through arrows and contracts, and handles
+recursive types by checking if a variable occurs in its own type
+expansion:
+
+  occurs(TE, X, T -> T') = occurs(TE, X, T) or occurs(TE, X, T')
+  occurs(TE, X, T/c)     = occurs(TE, X, T)
+  occurs(TE, X, Y)       = X = Y
+  occurs(TE, X, _)       = false otherwise
+
+  unify(T) = unify'(EQ, T)
+
+  unify'(                      {}, TE) = TE
+
+  unify'(     (T = T')       U EQ, TE) = unify'(EQ,                       TE)
+    when T = T'
+  unify'(     (X = T)        U EQ, TE) = unify'(EQ U (T = TE(X)),         TE)
+    when not occurs(TE, X, T)
+  unify'(     (T = X)        U EQ, TE) = unify'(EQ U (X = T),             TE)
+
+  unify'(   (T/c = T'/c)     U EQ, TE) = unify'(EQ U (T = T'),            TE)
+
+  unify'((T -> U = T' -> U') U EQ, TE) = unify'(EQ U (T = T') U (U = U'), TE)
+
+
+References:
+
+Clement, (1987). The Natural Dynamic Semantics of Mini-Standard
+  ML. TAPSOFT'87, Vol 2. LNCS, Vol. 250, pp 67–81
+Damas, Milner (1982), "Principal type-schemes for functional
+  programs". 9th Symposium on Principles of programming languages
+  (POPL'82) pp. 207–212, ACM
+Findler, Robert Bruce, and Matthias Felleisen. "Contracts for
+  higher-order functions." ACM SIGPLAN Notices. Vol. 37. No. 9. ACM,
+  2002.  Van Horn, Program Analysis and Understanding
